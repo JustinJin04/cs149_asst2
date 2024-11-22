@@ -52,7 +52,7 @@ TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads)
   // Implementations are free to add new class member variables
   // (requiring changes to tasksys.h).
   //
-  _max_num_threads = num_threads;
+  _max_num_threads = num_threads-1;
   _mutex = new std::mutex();
   _thread_pool = new std::thread[_max_num_threads];
 }
@@ -88,6 +88,7 @@ void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     _thread_pool[i] = std::thread(&TaskSystemParallelSpawn::threadRun, this,
                                   &task_id, num_total_tasks, runnable);
   }
+  threadRun(&task_id, num_total_tasks, runnable);
 
   for (int i = 0; i < _max_num_threads; ++i) {
     _thread_pool[i].join();
@@ -113,12 +114,13 @@ const char* TaskSystemParallelThreadPoolSpinning::name() {
 
 TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(
     int num_threads)
-    : ITaskSystem(num_threads), _num_worker(num_threads) {
+    : ITaskSystem(num_threads) {
   //
   // TODO: CS149 student implementations may decide to perform setup
   // operations (such as thread pool construction) here.
   // Implementations are free to add new class member variables
   // (requiring changes to tasksys.h).
+  _num_worker = num_threads - 1;
   _worker_pool = new Worker[_num_worker];
   for (int i = 0; i < _num_worker; ++i) {
     _worker_pool[i].initialize(i);
@@ -130,6 +132,7 @@ TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
     _worker_pool[i].exit();
   }
   delete[] _worker_pool;
+  printf("system exit\n");
 }
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable,
@@ -139,18 +142,26 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable,
   // method in Part A.  The implementation provided below runs all
   // tasks sequentially on the calling thread.
   //
-  // double start_time = CycleTimer::currentSeconds();
   _next_task_id.store(0);
   _finish_worker_num.store(0);
   for (int i = 0; i < _num_worker; ++i) {
-    _worker_pool->start_working(&_next_task_id, num_total_tasks, runnable,
-                                &_finish_worker_num);
+    _worker_pool[i].start_working(&_next_task_id, num_total_tasks, runnable,
+                                  &_finish_worker_num);
   }
-  printf("start to wait\n");
-  // double end_time = CycleTimer::currentSeconds();
-  // printf("elapsed time=%fms\n", (end_time - start_time) * 1000);
 
+  // main thread also do some work
+  while (1) {
+    int task_id = _next_task_id.fetch_add(1);
+    if (task_id >= num_total_tasks) {
+      break;
+    }
+    runnable->runTask(task_id, num_total_tasks);
+  }
+
+  // wait for other worker to finish
+  // printf("start to wait\n");
   while (_finish_worker_num.load() < _num_worker);
+  // printf("finish waiting\n");
 }
 
 TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(
@@ -179,6 +190,11 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(
   // Implementations are free to add new class member variables
   // (requiring changes to tasksys.h).
   //
+  _num_worker = num_threads;
+  _worker_pool = new Worker[_num_worker];
+  for(int i=0;i<_num_worker;++i){
+    _worker_pool[i].initialize();
+  }
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
@@ -188,6 +204,10 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
   // Implementations are free to add new class member variables
   // (requiring changes to tasksys.h).
   //
+  for(int i=0;i<_num_worker;++i){
+    _worker_pool[i].exit();
+  }
+  delete[] _worker_pool;
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable,
@@ -197,9 +217,13 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable,
   // method in Parts A and B.  The implementation provided below runs all
   // tasks sequentially on the calling thread.
   //
+  std::atomic<int> nxt_task_id{0};
+  for(int i=0;i<_num_worker;++i){
+    _worker_pool[i].start_working(&nxt_task_id, num_total_tasks, runnable);
+  }
 
-  for (int i = 0; i < num_total_tasks; i++) {
-    runnable->runTask(i, num_total_tasks);
+  for(int i=0;i<_num_worker;++i){
+    _worker_pool[i].wait();
   }
 }
 
